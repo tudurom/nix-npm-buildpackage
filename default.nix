@@ -1,5 +1,5 @@
 { writeShellScriptBin, writeText, runCommand, writeScriptBin, stdenv, lib
-, fetchurl, makeWrapper, nodejs, yarn, jq }:
+, fetchurl, makeWrapper, nodejs, yarn, jq, pkg-config, python39 }:
 with lib;
 let
   inherit (builtins) fromJSON toJSON split removeAttrs toFile;
@@ -90,7 +90,7 @@ let
     installJavascript = true;
   };
 
-  commonBuildInputs = [ nodejs makeWrapper ]; # TODO: git?
+  commonBuildInputs = [ nodejs makeWrapper jq pkg-config python39 ]; # TODO: git?
 
   # unpack the .tgz into output directory and add npm wrapper
   # TODO: "cd $out" vs NIX_NPM_BUILDPACKAGE_OUT=$out?
@@ -117,7 +117,7 @@ let
   '';
 
 in rec {
-  mkNodeModules = { src, packageOverrides, extraEnvVars ? { }, pname, version }:
+  mkNodeModules = { src, packageOverrides, extraEnvVars ? { }, pname, version, buildInputs ? [] }:
     let
       packageJson = src + /package.json;
       packageLockJson = src + /package-lock.json;
@@ -125,8 +125,6 @@ in rec {
       lock = fromJSON (readFile packageLockJson);
     in stdenv.mkDerivation ({
       name = "${pname}-${version}-node-modules";
-
-      buildInputs = [ nodejs jq ];
 
       npmFlags = npmFlagsNpm;
       buildCommand = ''
@@ -139,6 +137,9 @@ in rec {
         # directory to fix it
         export HOME=$(mktemp -d)
         chmod a-w "$HOME"
+
+        export PKG_CONFIG_PATH="$PKG_CONFIG_PATH_FOR_TARGET"
+        echo "pkg_config $PKG_CONFIG_PATH"
 
         # do not run the toplevel lifecycle scripts, we only do dependencies
         cp ${toFile "package.json" (builtins.toJSON (info // { scripts = { }; }))} ./package.json
@@ -157,7 +158,9 @@ in rec {
         mkdir $out
         mv ./node_modules $out/
       '';
-    } // extraEnvVars);
+    } // extraEnvVars // {
+      buildInputs = commonBuildInputs ++ buildInputs;
+    });
 
   buildNpmPackage = args@{ src, npmBuild ? ''
     # this is what npm runs by default, only run when it exists
@@ -169,7 +172,7 @@ in rec {
     let
       inherit (npmInfo src) pname version;
       nodeModules = mkNodeModules {
-        inherit src packageOverrides extraEnvVars pname version;
+        inherit src packageOverrides extraEnvVars pname version buildInputs;
       };
     in stdenv.mkDerivation ({
       inherit pname version;
